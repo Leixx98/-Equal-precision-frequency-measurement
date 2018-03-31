@@ -57,17 +57,10 @@ void Error_Handler(void);
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
-uint8_t     TIM4CH1_CAPTURE_STA=0X80;		//输入捕获状态		    				
-uint32_t	TIM1_COUNTER_VAL[100];	        //定时器1计数组
-uint32_t    TIM2_COUNTER_VAL[100];          //定时器2计数组
-float	    TIM1_COUNTER_Val;	            //定时器1计数值
-float       TIM2_COUNTER_Val;               //定时器2计数值
+uint16_t     TIM4CH1_CAPTURE_STA=0X80;		//输入捕获状态		    				
 float       TIM_FREQ;                       //频率值
-uint8_t     TIM4CH1_CAPTURE_GATE=0;         //预设闸门标志位
-uint8_t     TIM4CH1_CAPTURE_STB=0;          //数组存满标志位
-static uint8_t     i;                       //数组用
-uint32_t	TIM1_COUNTER_TEMP;	            //定时器1计数滤波
-uint32_t    TIM2_COUNTER_TEMP;              //定时器2计数滤波
+uint32_t	  TIM1_COUNTER_TEMP;	            //定时器1计数值
+uint32_t    TIM2_COUNTER_TEMP;              //定时器2计数值
 /* USER CODE END 0 */
 
 int main(void)
@@ -97,13 +90,12 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_TIM_IC_Start_IT(&htim4,TIM_CHANNEL_1); //使能TIM4输入捕获中断
   __HAL_TIM_ENABLE_IT(&htim4, TIM_CHANNEL_1); //使能更新中断
-  HAL_TIM_Base_Start_IT(&htim5);             //使能TIM5定时器中断
+
 
   
     __HAL_TIM_SET_COUNTER(&htim1,0);      //定时器1清零
     __HAL_TIM_SET_COUNTER(&htim2,0);      //定时器2清零 
-  
-  TIM4CH1_CAPTURE_GATE = 1;                   //开启预设闸门
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -111,20 +103,25 @@ int main(void)
   while (1)
   {
   /* USER CODE END WHILE */
-    if(TIM4CH1_CAPTURE_STB)
-    {        
-        TIM1_COUNTER_Val = (float) TIM1_COUNTER_TEMP / 100;
-        TIM2_COUNTER_Val = (float) TIM2_COUNTER_TEMP / 100;        
-        TIM_FREQ = (float)(TIM2_COUNTER_Val*200.0f)/TIM1_COUNTER_Val;
+    if(TIM4CH1_CAPTURE_STA&0X800)
+    {            
+        TIM_FREQ = (float)(TIM2_COUNTER_TEMP*20.0f)/TIM1_COUNTER_TEMP;
         
-        printf("%c%.2fKHZ %c%c%c%c",x,TIM_FREQ,x,f,f,f);
+        printf("%.2fKHZ",TIM_FREQ);
         
         TIM1_COUNTER_TEMP = 0;
         TIM2_COUNTER_TEMP = 0;
-        TIM4CH1_CAPTURE_STB = 0;
-        TIM4CH1_CAPTURE_STA |= 0X80;
+        TIM4CH1_CAPTURE_STA = 0X80;
         HAL_TIM_IC_Start_IT(&htim4,TIM_CHANNEL_1);
     }  
+    
+    else if(TIM4CH1_CAPTURE_STA&0X400)
+    {
+        TIM_FREQ = (float) 20000 / TIM1_COUNTER_TEMP;
+        printf("%.2fHZ",TIM_FREQ);
+        TIM1_COUNTER_TEMP = 0;
+        TIM4CH1_CAPTURE_STA = 0X80;
+    }
   /* USER CODE BEGIN 3 */
 
   }
@@ -180,60 +177,75 @@ void SystemClock_Config(void)
 //定时器TIM4输入捕获中断处理回调函数，该函数在HAL_TIM_IRQHandler中会被调用
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)//捕获中断发生时执行
 {	 
-                if(TIM4CH1_CAPTURE_GATE==0)
-                {   
-                  if(TIM4CH1_CAPTURE_STA&0X40)	//第二次捕获到一个上升沿 		
+                    //粗测第一次捕获上升沿
+                    if(TIM4CH1_CAPTURE_STA&0X80)
+                    {
+                        TIM4CH1_CAPTURE_STA = 0X40;		//等待第二次上升沿
+                        HAL_TIM_Base_Start(&htim1);     //使能定时器1，对标准信号计数
+                    }	
+                    //完成粗测
+                    else if(TIM4CH1_CAPTURE_STA&0X40)
+                    {
+                        if(__HAL_TIM_GET_COUNTER(&htim1) < 200)//获得定时器1计数值,小于200，则频率大于100
+                            TIM4CH1_CAPTURE_STA = 0x20;                    //开启等精度测频
+                        else 
+                            TIM4CH1_CAPTURE_STA = 0x04;                    //开启低频测频
+                        
+                       HAL_TIM_Base_Stop(&htim1);                        //关闭定时器1
+                       __HAL_TIM_SET_COUNTER(&htim1,0);       //定时器1清零
+                    }  
+                    
+                    else if(TIM4CH1_CAPTURE_STA&0X20)             //开启等精度测评
+                    {
+                        TIM4CH1_CAPTURE_STA = 0X10;                      //等待闸门时间
+                        HAL_TIM_Base_Start_IT(&htim5);                           //使能TIM5定时器中断
+                        __HAL_TIM_SET_COUNTER(&htim5,0);      //定时器5清零
+                    }
+                    
+                    else if(TIM4CH1_CAPTURE_STA&0X10)              //开启计数
+                    {
+                          TIM4CH1_CAPTURE_STA = 0X01;   //等待闸门时间
+                          HAL_TIM_Base_Start(&htim1);     //对标准信号计数
+                          HAL_TIM_Base_Start(&htim2);     //对被测信号计数
+                    }
+                    
+                   else if(TIM4CH1_CAPTURE_STA&0X08)	//完成一次等精度测频
                   {	                      
-                    TIM4CH1_CAPTURE_STA = 0X80;		//标记成功捕获到一次高电平脉宽
-                    TIM1_COUNTER_VAL[i] = __HAL_TIM_GET_COUNTER(&htim1); //获得定时器1计数值
-                    TIM2_COUNTER_VAL[i] = __HAL_TIM_GET_COUNTER(&htim2); //获得定时器2计数值
+                        TIM1_COUNTER_TEMP = __HAL_TIM_GET_COUNTER(&htim1); //获得定时器1计数值
+                        TIM2_COUNTER_TEMP = __HAL_TIM_GET_COUNTER(&htim2); //获得定时器2计数值
+                                            
+                        HAL_TIM_IC_Stop_IT(&htim4,TIM_CHANNEL_1);
+                        HAL_TIM_Base_Stop(&htim1);            //关闭定时器1
+                        HAL_TIM_Base_Stop(&htim2);            //关闭定时器2 
+                        __HAL_TIM_SET_COUNTER(&htim1,0);      //定时器1清零
+                        __HAL_TIM_SET_COUNTER(&htim2,0);      //定时器2清零     
+                        TIM4CH1_CAPTURE_STA = 0X800;		//完成一次等精度测频                      
+                   }
+                  
+                   else if(TIM4CH1_CAPTURE_STA&0X04)        //开启低频检测
+                   {
+                       TIM4CH1_CAPTURE_STA = 0X02;    //等待第二次检测上升沿
+                       HAL_TIM_Base_Start(&htim1);     //使能定时器1，对标准信号计数
+                   }
                    
-                    TIM1_COUNTER_TEMP += TIM1_COUNTER_VAL[i];
-                    TIM2_COUNTER_TEMP += TIM2_COUNTER_VAL[i];
-
-                    i++;
-                        if(i == 100)
-                        {                        
-                            i = 0;
-                            TIM4CH1_CAPTURE_STB = 1;
-                            TIM4CH1_CAPTURE_STA = 0;
-                            HAL_TIM_IC_Stop_IT(&htim4,TIM_CHANNEL_1);
-                        }
-                    
-                    
-                    HAL_TIM_Base_Stop(&htim1);            //关闭定时器1
-                    HAL_TIM_Base_Stop(&htim2);            //关闭定时器2   
-                    __HAL_TIM_SET_COUNTER(&htim1,0);      //定时器1清零
-                    __HAL_TIM_SET_COUNTER(&htim2,0);      //定时器2清零                
-
-                }
-                
-
-			}
-                if(TIM4CH1_CAPTURE_GATE==1)
-                {
-                    if(TIM4CH1_CAPTURE_STA&0X80)//第一次捕获上升沿
-			    {
-                    TIM4CH1_CAPTURE_STA = 0X40;		//标记捕获到了上升沿
-                    HAL_TIM_Base_Start(&htim1);     //使能定时器1，对标准信号计数
-                    HAL_TIM_Base_Start(&htim2);     //使能定时器2，对被测信号计数
-                }
-			}		    
-		
+                   else if(TIM4CH1_CAPTURE_STA&0X02)      //完成低频检测
+                   {
+                       TIM1_COUNTER_TEMP = __HAL_TIM_GET_COUNTER(&htim1); //获得定时器1计数值
+                       HAL_TIM_Base_Stop(&htim1);            //关闭定时器1
+                       __HAL_TIM_SET_COUNTER(&htim1,0);      //定时器1清零
+                       TIM4CH1_CAPTURE_STA = 0X400;  //输出结果
+                   }
+              
 }
+		
+
  //定时器TIM5溢出中断处理回调函数
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if(TIM5 == htim->Instance)
     {
-       if(TIM4CH1_CAPTURE_GATE)
-       {
-            TIM4CH1_CAPTURE_GATE = 0;
-       }
-       else 
-       {
-            TIM4CH1_CAPTURE_GATE = 1;
-       }
+       if(TIM4CH1_CAPTURE_STA&0x01)
+            TIM4CH1_CAPTURE_STA = 0x08;
     }
 }    
 
